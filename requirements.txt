@@ -1,0 +1,10 @@
+wikipedia
+mcp
+langgraph
+langchain-openai
+langchain-core
+langchain-mcp-adapters
+fastapi
+uvicorn[standard]
+typing_extensions
+pydantic

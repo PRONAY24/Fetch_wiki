@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wikipedia Search Agent</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .chat-container {
+            width: 100%;
+            max-width: 750px;
+            height: 90vh;
+            background: #fff;
+            border-radius: 20px;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.25);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .chat-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px 25px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .chat-header .icon { font-size: 28px; }
+        .chat-header h1 { font-size: 1.3rem; font-weight: 600; }
+        .chat-header p { font-size: 0.85rem; opacity: 0.85; }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 25px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            background: #f8f9fa;
+        }
+
+        .message {
+            max-width: 85%;
+            padding: 14px 18px;
+            border-radius: 18px;
+            line-height: 1.6;
+            font-size: 0.95rem;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            align-self: flex-end;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.assistant {
+            background: white;
+            color: #333;
+            align-self: flex-start;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+
+        .message.assistant a { color: #667eea; text-decoration: none; }
+        .message.assistant a:hover { text-decoration: underline; }
+
+        .message.prompt-used {
+            font-size: 0.8rem;
+            background: #e8f4fd;
+            color: #1976d2;
+            padding: 8px 14px;
+            border-radius: 12px;
+            align-self: flex-end;
+        }
+
+        .typing-indicator {
+            display: flex;
+            gap: 5px;
+            padding: 14px 18px;
+            background: white;
+            border-radius: 18px;
+            align-self: flex-start;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+
+        .typing-indicator span {
+            width: 8px;
+            height: 8px;
+            background: #667eea;
+            border-radius: 50%;
+            animation: bounce 1.4s infinite ease-in-out;
+        }
+
+        .typing-indicator span:nth-child(1) { animation-delay: 0s; }
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+
+        /* Prompt Panel */
+        .prompt-panel {
+            background: #f0f4ff;
+            border-top: 1px solid #ddd;
+            padding: 15px 20px;
+            display: none;
+        }
+
+        .prompt-panel.active { display: block; }
+
+        .prompt-panel h3 {
+            font-size: 0.9rem;
+            color: #555;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .prompt-panel h3 button {
+            background: none;
+            border: none;
+            font-size: 1.2rem;
+            cursor: pointer;
+            color: #888;
+        }
+
+        .prompt-select {
+            width: 100%;
+            padding: 10px 14px;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            font-size: 0.95rem;
+            margin-bottom: 12px;
+            background: white;
+        }
+
+        .prompt-args {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .prompt-args input {
+            padding: 10px 14px;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            font-size: 0.95rem;
+        }
+
+        .prompt-args input:focus {
+            border-color: #667eea;
+            outline: none;
+        }
+
+        .prompt-args label {
+            font-size: 0.85rem;
+            color: #666;
+            margin-bottom: -6px;
+        }
+
+        .run-prompt-btn {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .run-prompt-btn:hover {
+            transform: scale(1.02);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .run-prompt-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Input Area */
+        .chat-input-container {
+            padding: 15px 20px;
+            background: white;
+            border-top: 1px solid #eee;
+        }
+
+        .input-mode-toggle {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .mode-btn {
+            flex: 1;
+            padding: 8px;
+            border: 2px solid #e0e0e0;
+            background: white;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .mode-btn.active {
+            border-color: #667eea;
+            background: #f0f4ff;
+            color: #667eea;
+            font-weight: 600;
+        }
+
+        .chat-input-wrapper {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        #chat-input {
+            flex: 1;
+            padding: 14px 20px;
+            border: 2px solid #e9ecef;
+            border-radius: 25px;
+            font-size: 1rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        #chat-input:focus { border-color: #667eea; }
+
+        #send-btn {
+            width: 50px;
+            height: 50px;
+            border: none;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 1.2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        #send-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        #send-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .welcome-message {
+            text-align: center;
+            color: #666;
+            padding: 40px 20px;
+        }
+
+        .welcome-message h2 { font-size: 1.5rem; margin-bottom: 10px; color: #333; }
+        .welcome-message p { font-size: 0.95rem; line-height: 1.6; }
+
+        .suggestions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+
+        .suggestion {
+            padding: 10px 16px;
+            background: #f0f0f0;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .suggestion:hover { background: #e0e0e0; }
+
+        .no-prompts {
+            color: #888;
+            font-size: 0.9rem;
+            text-align: center;
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <div class="icon">📚</div>
+            <div>
+                <h1>Wikipedia Search Agent</h1>
+                <p>Ask anything or use structured prompts!</p>
+            </div>
+        </div>
+
+        <div class="chat-messages" id="chat-messages">
+            <div class="welcome-message">
+                <h2>👋 Welcome!</h2>
+                <p>I can search Wikipedia, list article sections, and get specific content.<br>
+                   Use <strong>Chat</strong> for free-form questions or <strong>Prompts</strong> for structured queries.</p>
+                <div class="suggestions">
+                    <div class="suggestion" onclick="sendSuggestion(this)">Tell me about Python programming</div>
+                    <div class="suggestion" onclick="sendSuggestion(this)">What is quantum computing?</div>
+                    <div class="suggestion" onclick="sendSuggestion(this)">History of the Roman Empire</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Prompt Panel (hidden by default) -->
+        <div class="prompt-panel" id="prompt-panel">
+            <h3>
+                <span>📋 Select a Prompt</span>
+                <button onclick="toggleMode('chat')">✕</button>
+            </h3>
+            <select class="prompt-select" id="prompt-select" onchange="onPromptChange()">
+                <option value="">-- Choose a prompt --</option>
+            </select>
+            <div class="prompt-args" id="prompt-args"></div>
+            <button class="run-prompt-btn" id="run-prompt-btn" onclick="executePrompt()" disabled>
+                Run Prompt
+            </button>
+        </div>
+
+        <div class="chat-input-container">
+            <div class="input-mode-toggle">
+                <button class="mode-btn active" id="mode-chat" onclick="toggleMode('chat')">💬 Chat</button>
+                <button class="mode-btn" id="mode-prompt" onclick="toggleMode('prompt')">📋 Prompts</button>
+            </div>
+            <div class="chat-input-wrapper" id="chat-input-wrapper">
+                <input type="text" id="chat-input" placeholder="Ask about any topic..." autocomplete="off">
+                <button id="send-btn" onclick="sendMessage()">➤</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const chatMessages = document.getElementById('chat-messages');
+        const chatInput = document.getElementById('chat-input');
+        const sendBtn = document.getElementById('send-btn');
+        const promptPanel = document.getElementById('prompt-panel');
+        const promptSelect = document.getElementById('prompt-select');
+        const promptArgs = document.getElementById('prompt-args');
+        const runPromptBtn = document.getElementById('run-prompt-btn');
+        const chatInputWrapper = document.getElementById('chat-input-wrapper');
+        const threadId = 'session-' + Date.now();
+
+        let prompts = [];
+        let currentMode = 'chat';
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', loadPrompts);
+
+        chatInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        async function loadPrompts() {
+            try {
+                const response = await fetch('/api/prompts');
+                const data = await response.json();
+                prompts = data.prompts || [];
+                
+                promptSelect.innerHTML = '<option value="">-- Choose a prompt --</option>';
+                prompts.forEach((p, idx) => {
+                    const opt = document.createElement('option');
+                    opt.value = idx;
+                    opt.textContent = p.description || p.name;
+                    promptSelect.appendChild(opt);
+                });
+
+                if (prompts.length === 0) {
+                    promptArgs.innerHTML = '<div class="no-prompts">No prompts available from the server.</div>';
+                }
+            } catch (e) {
+                console.error('Failed to load prompts:', e);
+            }
+        }
+
+        function toggleMode(mode) {
+            currentMode = mode;
+            document.getElementById('mode-chat').classList.toggle('active', mode === 'chat');
+            document.getElementById('mode-prompt').classList.toggle('active', mode === 'prompt');
+            promptPanel.classList.toggle('active', mode === 'prompt');
+            chatInputWrapper.style.display = mode === 'chat' ? 'flex' : 'none';
+        }
+
+        function onPromptChange() {
+            const idx = promptSelect.value;
+            promptArgs.innerHTML = '';
+            
+            if (idx === '' || !prompts[idx]) {
+                runPromptBtn.disabled = true;
+                return;
+            }
+
+            const prompt = prompts[idx];
+            
+            if (prompt.arguments && prompt.arguments.length > 0) {
+                prompt.arguments.forEach(arg => {
+                    const label = document.createElement('label');
+                    label.textContent = arg.description || arg.name;
+                    
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.placeholder = `Enter ${arg.name}...`;
+                    input.dataset.argName = arg.name;
+                    input.required = arg.required;
+                    
+                    promptArgs.appendChild(label);
+                    promptArgs.appendChild(input);
+                });
+            } else {
+                promptArgs.innerHTML = '<div style="color:#666;font-size:0.9rem;">No arguments required.</div>';
+            }
+
+            runPromptBtn.disabled = false;
+        }
+
+        function sendSuggestion(el) {
+            toggleMode('chat');
+            chatInput.value = el.textContent;
+            sendMessage();
+        }
+
+        function addMessage(content, role, extra = null) {
+            const welcome = document.querySelector('.welcome-message');
+            if (welcome) welcome.remove();
+
+            if (extra) {
+                const extraDiv = document.createElement('div');
+                extraDiv.className = 'message prompt-used';
+                extraDiv.textContent = extra;
+                chatMessages.appendChild(extraDiv);
+            }
+
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `message ${role}`;
+            msgDiv.innerHTML = formatMessage(content);
+            chatMessages.appendChild(msgDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function formatMessage(text) {
+            return text
+                .replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank">$1</a>')
+                .replace(/\n/g, '<br>');
+        }
+
+        function showTyping() {
+            const typing = document.createElement('div');
+            typing.className = 'typing-indicator';
+            typing.id = 'typing';
+            typing.innerHTML = '<span></span><span></span><span></span>';
+            chatMessages.appendChild(typing);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function hideTyping() {
+            const typing = document.getElementById('typing');
+            if (typing) typing.remove();
+        }
+
+        async function sendMessage() {
+            const message = chatInput.value.trim();
+            if (!message) return;
+
+            chatInput.value = '';
+            sendBtn.disabled = true;
+
+            addMessage(message, 'user');
+            showTyping();
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message, thread_id: threadId })
+                });
+
+                const data = await response.json();
+                hideTyping();
+                addMessage(data.response, 'assistant');
+            } catch (error) {
+                hideTyping();
+                addMessage('Sorry, something went wrong. Please try again.', 'assistant');
+            }
+
+            sendBtn.disabled = false;
+            chatInput.focus();
+        }
+
+        async function executePrompt() {
+            const idx = promptSelect.value;
+            if (idx === '' || !prompts[idx]) return;
+
+            const prompt = prompts[idx];
+            const args = {};
+            
+            const inputs = promptArgs.querySelectorAll('input');
+            for (const input of inputs) {
+                if (input.required && !input.value.trim()) {
+                    input.focus();
+                    return;
+                }
+                args[input.dataset.argName] = input.value.trim();
+            }
+
+            runPromptBtn.disabled = true;
+
+            // Build display string for what prompt was used
+            const argStr = Object.entries(args).map(([k, v]) => `${k}: "${v}"`).join(', ');
+            const promptLabel = `📋 ${prompt.name}` + (argStr ? ` (${argStr})` : '');
+
+            addMessage(promptLabel, 'user');
+            showTyping();
+
+            try {
+                const response = await fetch('/api/prompts/execute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prompt_name: prompt.name,
+                        arguments: args,
+                        thread_id: threadId
+                    })
+                });
+
+                const data = await response.json();
+                hideTyping();
+                addMessage(data.response, 'assistant');
+            } catch (error) {
+                hideTyping();
+                addMessage('Sorry, failed to execute the prompt.', 'assistant');
+            }
+
+            runPromptBtn.disabled = false;
+            
+            // Clear inputs
+            inputs.forEach(input => input.value = '');
+        }
+    </script>
+</body>
+</html>
