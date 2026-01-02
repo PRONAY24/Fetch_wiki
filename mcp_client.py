@@ -31,7 +31,7 @@ from langchain_mcp_adapters.tools import load_mcp_tools
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5-nano")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8000"))
 
@@ -276,4 +276,11 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host=HOST, port=PORT)
+    logger.info(f"Starting Wikipedia Search Agent on {HOST}:{PORT}")
+    uvicorn.run(
+        app,
+        host=HOST,
+        port=PORT,
+        access_log=True,
+        log_level="info"
+    )

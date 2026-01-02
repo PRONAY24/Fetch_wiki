@@ -1,5 +1,13 @@
+import logging
 import wikipedia
 from mcp.server.fastmcp import FastMCP
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 mcp = FastMCP("WikipediaSearch")
 
@@ -8,6 +16,7 @@ def fetch_wikipedia_info(query: str) -> dict:
     """
     Search Wikipedia for a topic and return title, summary, and URL of the best match.
     """
+    logger.info(f"Searching Wikipedia for: {query}")
     try:
         search_results = wikipedia.search(query)
         if not search_results:
@@ -94,5 +103,5 @@ def deep_dive(topic: str, aspect: str) -> str:
 
 # Run the MCP server
 if __name__ == "__main__":
-    print("Starting MCP Wikipedia Server...")
+    logger.info("Starting MCP Wikipedia Server...")
     mcp.run(transport="stdio")
