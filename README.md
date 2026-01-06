@@ -72,9 +72,17 @@ python mcp_server.py
 ├── mcp_client.py      # FastAPI web server + LangGraph agent
 ├── static/
 │   └── index.html     # Chat web interface
+├── docs/
+│   ├── ARCHITECTURE.md  # How the application works
+│   └── DEPLOYMENT.md    # Production deployment guide
 ├── requirements.txt   # Python dependencies
 └── README.md
 ```
+
+## 📚 Documentation
+
+- **[Architecture Guide](docs/ARCHITECTURE.md)** - Understand how the application works, components, and data flow
+- **[Deployment Guide](docs/DEPLOYMENT.md)** - Step-by-step production deployment on Linux servers
 
 ## 🔧 Configuration
 
