@@ -19,7 +19,6 @@ from langgraph.graph.message import AnyMessage, add_messages
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import tools_condition, ToolNode
 
-from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage
 from langchain_mcp_adapters.tools import load_mcp_tools
@@ -30,10 +29,25 @@ from langchain_mcp_adapters.tools import load_mcp_tools
 # =============================================================================
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8000"))
+
+# LLM Provider Configuration
+# Supported: "openai", "groq", "google", "ollama"
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "groq")
+
+# Provider-specific settings
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+GOOGLE_MODEL = os.environ.get("GOOGLE_MODEL", "gemini-1.5-flash")
+
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL.upper()),
@@ -49,6 +63,50 @@ server_params = StdioServerParameters(
 )
 
 
+def get_llm():
+    """Get the configured LLM based on LLM_PROVIDER environment variable."""
+    provider = LLM_PROVIDER.lower()
+    
+    if provider == "openai":
+        from langchain_openai import ChatOpenAI
+        logger.info(f"Using OpenAI: {OPENAI_MODEL}")
+        return ChatOpenAI(
+            model=OPENAI_MODEL,
+            temperature=0,
+            openai_api_key=OPENAI_API_KEY
+        ), OPENAI_MODEL
+    
+    elif provider == "groq":
+        from langchain_groq import ChatGroq
+        logger.info(f"Using Groq: {GROQ_MODEL}")
+        return ChatGroq(
+            model=GROQ_MODEL,
+            temperature=0,
+            groq_api_key=GROQ_API_KEY
+        ), GROQ_MODEL
+    
+    elif provider == "google":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        logger.info(f"Using Google: {GOOGLE_MODEL}")
+        return ChatGoogleGenerativeAI(
+            model=GOOGLE_MODEL,
+            temperature=0,
+            google_api_key=GOOGLE_API_KEY
+        ), GOOGLE_MODEL
+    
+    elif provider == "ollama":
+        from langchain_ollama import ChatOllama
+        logger.info(f"Using Ollama: {OLLAMA_MODEL}")
+        return ChatOllama(
+            model=OLLAMA_MODEL,
+            temperature=0,
+            base_url=OLLAMA_BASE_URL
+        ), OLLAMA_MODEL
+    
+    else:
+        raise ValueError(f"Unsupported LLM provider: {provider}. Use: openai, groq, google, ollama")
+
+
 # =============================================================================
 # LangGraph State & Agent
 # =============================================================================
@@ -57,19 +115,24 @@ class State(TypedDict):
     messages: Annotated[List[AnyMessage], add_messages]
 
 
+# Store the current model name for health check
+_current_model = None
+
+
 async def create_graph(session):
     """Create and compile the LangGraph agent with MCP tools."""
+    global _current_model
     tools = await load_mcp_tools(session)
 
-    llm = ChatOpenAI(
-        model=OPENAI_MODEL,
-        temperature=0,
-        openai_api_key=OPENAI_API_KEY
-    )
+    llm, _current_model = get_llm()
     llm_with_tools = llm.bind_tools(tools)
 
     prompt_template = ChatPromptTemplate.from_messages([
-        ("system", "You are a helpful assistant that uses tools to search Wikipedia. Be concise and informative."),
+        ("system", """You are a fast Wikipedia assistant. Rules:
+1. Use tools immediately - don't explain what you'll do first
+2. Give concise answers (2-3 paragraphs max)
+3. Always include the Wikipedia URL
+4. Use only ONE tool call when possible"""),
         MessagesPlaceholder("messages")
     ])
 
@@ -115,7 +178,7 @@ async def lifespan(app: FastAPI):
     await _mcp_session.initialize()
 
     _agent = await create_graph(_mcp_session)
-    logger.info(f"✅ Wikipedia MCP agent ready! Model: {OPENAI_MODEL}")
+    logger.info(f"✅ Wikipedia MCP agent ready! Provider: {LLM_PROVIDER} | Model: {_current_model}")
 
     yield
 
@@ -187,7 +250,7 @@ class HealthResponse(BaseModel):
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint."""
-    return HealthResponse(status="healthy", model=OPENAI_MODEL)
+    return HealthResponse(status="healthy", model=_current_model or "loading...")
 
 
 @app.post("/api/chat", response_model=ChatResponse)
