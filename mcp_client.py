@@ -253,6 +253,32 @@ async def health_check():
     return HealthResponse(status="healthy", model=_current_model or "loading...")
 
 
+@app.get("/api/cache/stats")
+async def cache_stats():
+    """
+    Get cache statistics for monitoring.
+    
+    This endpoint helps you understand:
+    - How many items are cached
+    - Cache hit/miss ratio
+    - Memory usage
+    """
+    from cache import get_cache_stats
+    return get_cache_stats()
+
+
+@app.delete("/api/cache")
+async def clear_cache():
+    """
+    Clear all cached Wikipedia data.
+    
+    Use this when you want fresh data from Wikipedia.
+    """
+    from cache import clear_cache as do_clear
+    deleted = do_clear()
+    return {"cleared": deleted, "message": f"Cleared {deleted} cached items"}
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """Handle regular chat messages."""

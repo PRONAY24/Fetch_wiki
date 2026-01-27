@@ -13,3 +13,7 @@ langchain-openai      # OpenAI (GPT models)
 langchain-groq        # Groq (Llama, Mixtral - FREE & FAST)
 langchain-google-genai # Google (Gemini)
 langchain-ollama      # Ollama (local models - FREE)
+gunicorn              # Production server
+
+# Distributed Systems - Phase 1: Caching
+redis                 # Redis client for caching

@@ -2,6 +2,9 @@ import logging
 import wikipedia
 from mcp.server.fastmcp import FastMCP
 
+# Import caching utilities
+from cache import cache_result, get_cache_stats, clear_cache
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -11,10 +14,18 @@ logger = logging.getLogger(__name__)
 
 mcp = FastMCP("WikipediaSearch")
 
+
+# =============================================================================
+# Wikipedia Tools with Caching
+# =============================================================================
+
 @mcp.tool()
+@cache_result("search", ttl=3600)  # Cache for 1 hour
 def fetch_wikipedia_info(query: str) -> dict:
     """
     Search Wikipedia for a topic and return title, summary, and URL of the best match.
+    
+    Results are cached to reduce API calls and improve response time.
     """
     logger.info(f"Searching Wikipedia for: {query}")
     try:
@@ -43,9 +54,12 @@ def fetch_wikipedia_info(query: str) -> dict:
 
 
 @mcp.tool()
+@cache_result("sections", ttl=7200)  # Cache for 2 hours (sections change less often)
 def list_wikipedia_sections(topic: str) -> dict:
     """
     Return a list of section titles from the Wikipedia page of a given topic.
+    
+    Results are cached for 2 hours.
     """
     try:
         page = wikipedia.page(topic)
@@ -53,11 +67,15 @@ def list_wikipedia_sections(topic: str) -> dict:
         return {"sections": sections}
     except Exception as e:
         return {"error": str(e)}
+
     
 @mcp.tool()
+@cache_result("content", ttl=7200)  # Cache for 2 hours
 def get_section_content(topic: str, section_title: str) -> dict:
     """
     Return the content of a specific section in a Wikipedia article.
+    
+    Results are cached for 2 hours.
     """
     try:
         page = wikipedia.page(topic)
@@ -68,7 +86,12 @@ def get_section_content(topic: str, section_title: str) -> dict:
             return {"error": f"Section '{section_title}' not found in article '{topic}'."}
     except Exception as e:
         return {"error": str(e)}
-    
+
+
+# =============================================================================
+# Prompts (unchanged)
+# =============================================================================
+
 @mcp.prompt()
 def highlight_sections_prompt(topic: str) -> str:
     """
@@ -104,4 +127,5 @@ def deep_dive(topic: str, aspect: str) -> str:
 # Run the MCP server
 if __name__ == "__main__":
     logger.info("Starting MCP Wikipedia Server...")
+    logger.info("📦 Caching enabled (Redis)")
     mcp.run(transport="stdio")
