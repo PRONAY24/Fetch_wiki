@@ -17,3 +17,8 @@ gunicorn              # Production server
 
 # Distributed Systems - Phase 1: Caching
 redis                 # Redis client for caching
+
+# Distributed Systems - Phase 2: Database Persistence
+sqlalchemy[asyncio]   # ORM with async support
+asyncpg               # Async PostgreSQL driver
+alembic               # Database migrations

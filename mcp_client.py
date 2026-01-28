@@ -1,3 +1,23 @@
+"""
+Wikipedia Search Agent - MCP Client with FastAPI
+=================================================
+
+This is the MAIN APPLICATION file that ties everything together.
+It creates a FastAPI web server that:
+
+1. Connects to the MCP Server (Wikipedia tools)
+2. Uses LangGraph for AI agent orchestration
+3. Persists conversations to PostgreSQL (Phase 2)
+4. Caches results in Redis (Phase 1)
+
+=== REQUEST FLOW ===
+
+User Request → FastAPI → LangGraph Agent → MCP Tools → Wikipedia API
+                 ↓                           ↓
+             PostgreSQL               Redis Cache
+          (save history)            (cache results)
+"""
+
 import os
 import logging
 from contextlib import asynccontextmanager
@@ -156,7 +176,7 @@ async def create_graph(session):
 
 
 # =============================================================================
-# Web Server
+# Web Server Lifecycle
 # =============================================================================
 
 _agent = None
@@ -166,26 +186,63 @@ _mcp_context = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage MCP connection lifecycle."""
+    """
+    Manage application lifecycle - startup and shutdown.
+    
+    === WHAT HAPPENS ON STARTUP ===
+    1. Connect to MCP server (Wikipedia tools)
+    2. Create LangGraph agent
+    3. Initialize database (Phase 2) - if available
+    
+    === WHAT HAPPENS ON SHUTDOWN ===
+    1. Close database connections
+    2. Close MCP connection
+    """
     global _agent, _mcp_session, _mcp_context
 
+    # === STARTUP ===
+    
+    # Initialize MCP connection (Wikipedia tools)
     logger.info("Starting MCP connection...")
-
     _mcp_context = stdio_client(server_params)
     read, write = await _mcp_context.__aenter__()
     _mcp_session = ClientSession(read, write)
     await _mcp_session.__aenter__()
     await _mcp_session.initialize()
 
+    # Create the LangGraph agent
     _agent = await create_graph(_mcp_session)
     logger.info(f"✅ Wikipedia MCP agent ready! Provider: {LLM_PROVIDER} | Model: {_current_model}")
 
-    yield
+    # Initialize database (Phase 2)
+    # GRACEFUL DEGRADATION: App works even if database is unavailable
+    try:
+        from database import init_database
+        await init_database()
+        logger.info("✅ Database initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ Database not available: {e}. Conversation history disabled.")
 
-    logger.info("Shutting down MCP connection...")
+    yield  # App runs here
+
+    # === SHUTDOWN ===
+    logger.info("Shutting down...")
+    
+    # Close database connections
+    try:
+        from database import close_database
+        await close_database()
+    except Exception:
+        pass  # Ignore errors during shutdown
+    
+    # Close MCP connection
     await _mcp_session.__aexit__(None, None, None)
     await _mcp_context.__aexit__(None, None, None)
 
+
+# =============================================================================
+# FastAPI Application
+# =============================================================================
 
 app = FastAPI(
     title="Wikipedia Search Agent",
@@ -198,13 +255,13 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 
 
 # =============================================================================
-# Request/Response Models
+# Request/Response Models (Pydantic)
 # =============================================================================
 
 class ChatRequest(BaseModel):
@@ -249,19 +306,23 @@ class HealthResponse(BaseModel):
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint for monitoring."""
     return HealthResponse(status="healthy", model=_current_model or "loading...")
 
+
+# =============================================================================
+# Cache Endpoints (Phase 1: Redis)
+# =============================================================================
 
 @app.get("/api/cache/stats")
 async def cache_stats():
     """
-    Get cache statistics for monitoring.
+    Get Redis cache statistics for monitoring.
     
-    This endpoint helps you understand:
-    - How many items are cached
-    - Cache hit/miss ratio
-    - Memory usage
+    Returns:
+        - cached_keys: Number of items in cache
+        - memory_usage: Redis memory usage
+        - cache_ttl: Default TTL setting
     """
     from cache import get_cache_stats
     return get_cache_stats()
@@ -279,23 +340,151 @@ async def clear_cache():
     return {"cleared": deleted, "message": f"Cleared {deleted} cached items"}
 
 
+# =============================================================================
+# Database Endpoints (Phase 2: PostgreSQL)
+# =============================================================================
+
+@app.get("/api/db/stats")
+async def database_stats():
+    """
+    Get database statistics.
+    
+    Returns:
+        - status: connected/disconnected
+        - total_conversations: Number of saved conversations
+        - total_messages: Number of saved messages
+    """
+    try:
+        from database import get_session
+        from repository import ConversationRepository
+        
+        async with get_session() as session:
+            repo = ConversationRepository(session)
+            stats = await repo.get_conversation_stats()
+            stats["status"] = "connected"
+            return stats
+    except Exception as e:
+        return {"status": "disconnected", "error": str(e)}
+
+
+@app.get("/api/conversations")
+async def list_conversations(limit: int = 20, offset: int = 0):
+    """
+    List saved conversations with pagination.
+    
+    Args:
+        limit: Maximum conversations to return (default: 20)
+        offset: Skip this many for pagination (default: 0)
+    """
+    try:
+        from database import get_session
+        from repository import ConversationRepository
+        
+        async with get_session() as session:
+            repo = ConversationRepository(session)
+            conversations = await repo.list_conversations(limit=limit, offset=offset)
+            return {
+                "conversations": [
+                    {
+                        "thread_id": c.thread_id,
+                        "title": c.title,
+                        "created_at": c.created_at.isoformat(),
+                        "updated_at": c.updated_at.isoformat(),
+                    }
+                    for c in conversations
+                ]
+            }
+    except Exception as e:
+        return {"error": str(e), "conversations": []}
+
+
+@app.get("/api/conversations/{thread_id}/messages")
+async def get_conversation_messages(thread_id: str, limit: int = 50):
+    """
+    Get messages from a specific conversation.
+    
+    Args:
+        thread_id: The conversation identifier
+        limit: Maximum messages to return (default: 50)
+    """
+    try:
+        from database import get_session
+        from repository import ConversationRepository
+        
+        async with get_session() as session:
+            repo = ConversationRepository(session)
+            messages = await repo.get_conversation_history(thread_id, limit=limit)
+            return {
+                "thread_id": thread_id,
+                "messages": [
+                    {
+                        "role": m.role.value,
+                        "content": m.content,
+                        "created_at": m.created_at.isoformat(),
+                    }
+                    for m in messages
+                ]
+            }
+    except Exception as e:
+        return {"error": str(e), "messages": []}
+
+
+# =============================================================================
+# Chat Endpoint (Core Functionality)
+# =============================================================================
+
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Handle regular chat messages."""
+    """
+    Main chat endpoint - handles user messages.
+    
+    Flow:
+    1. Receive user message
+    2. Invoke LangGraph agent (uses MCP tools to search Wikipedia)
+    3. Save conversation to database (Phase 2)
+    4. Return AI response
+    
+    === GRACEFUL DEGRADATION ===
+    If the database is unavailable, chat still works - we just don't save history.
+    """
     if not _agent:
         raise HTTPException(status_code=503, detail="Agent not initialized")
 
     try:
         logger.debug(f"Chat request: {request.message[:50]}...")
+        
+        # Invoke the LangGraph agent
         result = await _agent.ainvoke(
             {"messages": request.message},
             config={"configurable": {"thread_id": request.thread_id}}
         )
-        return ChatResponse(response=result["messages"][-1].content)
+        response_content = result["messages"][-1].content
+        
+        # === PHASE 2: Save to Database ===
+        # Wrapped in try/except for graceful degradation
+        try:
+            from database import get_session
+            from repository import ConversationRepository
+            from models import MessageRole
+            
+            async with get_session() as session:
+                repo = ConversationRepository(session)
+                # Save both the user message and AI response
+                await repo.add_message(request.thread_id, MessageRole.USER, request.message)
+                await repo.add_message(request.thread_id, MessageRole.ASSISTANT, response_content)
+        except Exception as db_error:
+            # Log but don't fail - chat still works without DB
+            logger.debug(f"Database save skipped: {db_error}")
+        
+        return ChatResponse(response=response_content)
     except Exception as e:
         logger.error(f"Chat error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# =============================================================================
+# MCP Prompts Endpoints
+# =============================================================================
 
 @app.get("/api/prompts", response_model=PromptsResponse)
 async def get_prompts():
@@ -350,6 +539,10 @@ async def execute_prompt(request: ExecutePromptRequest):
         logger.error(f"Prompt execution error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# =============================================================================
+# Static Files & UI
+# =============================================================================
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
