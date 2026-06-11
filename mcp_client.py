@@ -24,12 +24,13 @@ from contextlib import asynccontextmanager
 from typing import Annotated, List, Optional
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing_extensions import TypedDict
+import secrets as _secrets
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -51,6 +52,10 @@ from langchain_mcp_adapters.tools import load_mcp_tools
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8000"))
+
+# API key gate for sensitive endpoints. MUST be set in production.
+WIKI_API_KEY = os.environ.get("WIKI_API_KEY", "").strip()
+ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "").strip()
 
 # LLM Provider Configuration
 # Supported: "openai", "groq", "google", "ollama"
@@ -251,13 +256,26 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# CORS: with credentials we can't use "*". Default to same-origin only
+# unless ALLOWED_ORIGIN is explicitly set (e.g. https://wiki.example.com).
+_cors_origins = [ALLOWED_ORIGIN] if ALLOWED_ORIGIN else []
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=bool(_cors_origins),
     allow_methods=["GET", "POST", "DELETE"],
-    allow_headers=["*"],
+    allow_headers=["Content-Type", "X-API-Key"],
 )
+
+
+def require_api_key(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
+    """Constant-time API key check. 401 if missing or wrong."""
+    if not WIKI_API_KEY:
+        # Fail closed: if the server has no key configured, refuse rather
+        # than silently allowing access.
+        raise HTTPException(status_code=503, detail="Server not configured")
+    if not x_api_key or not _secrets.compare_digest(x_api_key, WIKI_API_KEY):
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 # =============================================================================
@@ -314,7 +332,7 @@ async def health_check():
 # Cache Endpoints (Phase 1: Redis)
 # =============================================================================
 
-@app.get("/api/cache/stats")
+@app.get("/api/cache/stats", dependencies=[Depends(require_api_key)])
 async def cache_stats():
     """
     Get Redis cache statistics for monitoring.
@@ -328,7 +346,7 @@ async def cache_stats():
     return get_cache_stats()
 
 
-@app.delete("/api/cache")
+@app.delete("/api/cache", dependencies=[Depends(require_api_key)])
 async def clear_cache():
     """
     Clear all cached Wikipedia data.
@@ -344,11 +362,11 @@ async def clear_cache():
 # Database Endpoints (Phase 2: PostgreSQL)
 # =============================================================================
 
-@app.get("/api/db/stats")
+@app.get("/api/db/stats", dependencies=[Depends(require_api_key)])
 async def database_stats():
     """
     Get database statistics.
-    
+
     Returns:
         - status: connected/disconnected
         - total_conversations: Number of saved conversations
@@ -357,29 +375,32 @@ async def database_stats():
     try:
         from database import get_session
         from repository import ConversationRepository
-        
+
         async with get_session() as session:
             repo = ConversationRepository(session)
             stats = await repo.get_conversation_stats()
             stats["status"] = "connected"
             return stats
-    except Exception as e:
-        return {"status": "disconnected", "error": str(e)}
+    except Exception:
+        logger.exception("database_stats failed")
+        return {"status": "disconnected"}
 
 
-@app.get("/api/conversations")
+@app.get("/api/conversations", dependencies=[Depends(require_api_key)])
 async def list_conversations(limit: int = 20, offset: int = 0):
     """
     List saved conversations with pagination.
-    
+
     Args:
         limit: Maximum conversations to return (default: 20)
         offset: Skip this many for pagination (default: 0)
     """
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
     try:
         from database import get_session
         from repository import ConversationRepository
-        
+
         async with get_session() as session:
             repo = ConversationRepository(session)
             conversations = await repo.list_conversations(limit=limit, offset=offset)
@@ -394,23 +415,25 @@ async def list_conversations(limit: int = 20, offset: int = 0):
                     for c in conversations
                 ]
             }
-    except Exception as e:
-        return {"error": str(e), "conversations": []}
+    except Exception:
+        logger.exception("list_conversations failed")
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
-@app.get("/api/conversations/{thread_id}/messages")
+@app.get("/api/conversations/{thread_id}/messages", dependencies=[Depends(require_api_key)])
 async def get_conversation_messages(thread_id: str, limit: int = 50):
     """
     Get messages from a specific conversation.
-    
+
     Args:
         thread_id: The conversation identifier
         limit: Maximum messages to return (default: 50)
     """
+    limit = max(1, min(limit, 200))
     try:
         from database import get_session
         from repository import ConversationRepository
-        
+
         async with get_session() as session:
             repo = ConversationRepository(session)
             messages = await repo.get_conversation_history(thread_id, limit=limit)
@@ -425,15 +448,16 @@ async def get_conversation_messages(thread_id: str, limit: int = 50):
                     for m in messages
                 ]
             }
-    except Exception as e:
-        return {"error": str(e), "messages": []}
+    except Exception:
+        logger.exception("get_conversation_messages failed")
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 # =============================================================================
 # Chat Endpoint (Core Functionality)
 # =============================================================================
 
-@app.post("/api/chat", response_model=ChatResponse)
+@app.post("/api/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
 async def chat(request: ChatRequest):
     """
     Main chat endpoint - handles user messages.
@@ -477,16 +501,16 @@ async def chat(request: ChatRequest):
             logger.debug(f"Database save skipped: {db_error}")
         
         return ChatResponse(response=response_content)
-    except Exception as e:
-        logger.error(f"Chat error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Chat error")
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 # =============================================================================
 # MCP Prompts Endpoints
 # =============================================================================
 
-@app.get("/api/prompts", response_model=PromptsResponse)
+@app.get("/api/prompts", response_model=PromptsResponse, dependencies=[Depends(require_api_key)])
 async def get_prompts():
     """Get available MCP prompts."""
     if not _mcp_session:
@@ -520,7 +544,7 @@ async def get_prompts():
         return PromptsResponse(prompts=[])
 
 
-@app.post("/api/prompts/execute", response_model=ChatResponse)
+@app.post("/api/prompts/execute", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
 async def execute_prompt(request: ExecutePromptRequest):
     """Execute an MCP prompt and return the result."""
     if not _agent or not _mcp_session:
@@ -535,9 +559,9 @@ async def execute_prompt(request: ExecutePromptRequest):
             config={"configurable": {"thread_id": request.thread_id}}
         )
         return ChatResponse(response=result["messages"][-1].content)
-    except Exception as e:
-        logger.error(f"Prompt execution error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Prompt execution error")
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 # =============================================================================

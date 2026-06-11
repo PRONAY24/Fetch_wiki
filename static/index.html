@@ -385,6 +385,25 @@
         let prompts = [];
         let currentMode = 'chat';
 
+        // --- API key handling ---------------------------------------------------
+        function getApiKey() {
+            let k = localStorage.getItem('wiki_api_key');
+            if (!k) {
+                k = prompt('Enter API key:') || '';
+                if (k) localStorage.setItem('wiki_api_key', k);
+            }
+            return k;
+        }
+        async function apiFetch(url, opts = {}) {
+            const headers = Object.assign({}, opts.headers || {}, { 'X-API-Key': getApiKey() });
+            const r = await fetch(url, Object.assign({}, opts, { headers }));
+            if (r.status === 401) {
+                localStorage.removeItem('wiki_api_key');
+                alert('Invalid API key — please reload and try again.');
+            }
+            return r;
+        }
+
         // Initialize
         document.addEventListener('DOMContentLoaded', loadPrompts);
 
@@ -397,7 +416,7 @@
 
         async function loadPrompts() {
             try {
-                const response = await fetch('/api/prompts');
+                const response = await apiFetch('/api/prompts');
                 const data = await response.json();
                 prompts = data.prompts || [];
                 
@@ -512,7 +531,7 @@
             showTyping();
 
             try {
-                const response = await fetch('/api/chat', {
+                const response = await apiFetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ message, thread_id: threadId })
@@ -556,7 +575,7 @@
             showTyping();
 
             try {
-                const response = await fetch('/api/prompts/execute', {
+                const response = await apiFetch('/api/prompts/execute', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
